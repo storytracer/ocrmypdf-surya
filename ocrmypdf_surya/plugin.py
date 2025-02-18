@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import os
 import tempfile
 from pathlib import Path
@@ -42,6 +43,7 @@ def initialize(plugin_manager: pluggy.PluginManager):
 @hookimpl
 def check_options(options):
     """Validate options and set up Surya environment variables."""
+    options.jobs = 1
     # Handle Surya environment variables
     if hasattr(options, 'surya_env') and options.surya_env:
         for env_var in options.surya_env.split(','):
@@ -316,7 +318,11 @@ class SuryaOcrEngine(OcrEngine):
             )
             
             # Create word with text and confidence
-            confidence = int((text_line.confidence or 0.0) * 100)
+            confidence_val = text_line.confidence
+            if confidence_val is None or (isinstance(confidence_val, float) and math.isnan(confidence_val)):
+                confidence = 0
+            else:
+                confidence = int(float(confidence_val) * 100)
             word = etree.SubElement(
                 line,
                 "span",
