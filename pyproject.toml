@@ -1,0 +1,39 @@
+[build-system]
+requires = ["setuptools>=42", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ocrmypdf-surya"
+version = "0.1.0"
+description = "Surya OCR plugin for OCRmyPDF"
+readme = "README.md"
+authors = [
+    {name = "Sebastian Majstorovic", email = "storytracer@gmail.com"}
+]
+license = {text = "GPL-3.0"}
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: End Users/Desktop",
+    "License :: OSI Approved :: GNU General Public License v3 (GPLv3)",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Topic :: Text Processing :: Linguistic",
+]
+keywords = ["ocr", "pdf", "surya", "ocrmypdf"]
+dependencies = [
+    "ocrmypdf>=14.0.0",
+    "surya-ocr>=0.1.0",
+    "lxml>=4.6.0",
+    "pluggy>=1.0.0",
+    "pillow>=9.0.0",
+]
+requires-python = ">=3.8"
+
+[project.urls]
+"Homepage" = "https://github.com/storytracer/ocrmypdf-surya"
+"Bug Tracker" = "https://github.com/storytracer/ocrmypdf-surya/issues"
+
+[project.entry-points."ocrmypdf"]
+surya = "ocrmypdf_surya"
