@@ -152,6 +152,7 @@ class SuryaOcrEngine(OcrEngine):
         self,
         input_file: Path,
         output_file: Path,
+        output_text: Path,
         language: List[str],
         image_dpi: Optional[float],
         options: Dict[str, Any],
@@ -189,6 +190,12 @@ class SuryaOcrEngine(OcrEngine):
             
             # Get the first (and only) page from results
             page_data = predictions[0]
+            
+            # Extract plain text from hOCR for output_text
+            if output_text:
+                text = '\n'.join([line.text for line in page_data.text_lines])
+                with open(output_text, 'w', encoding='utf-8') as f:
+                    f.write(text)
             
             # Generate hOCR from Surya results
             self._surya_to_hocr(page_data, input_file, output_file, image_dpi)
@@ -339,17 +346,11 @@ class SuryaOcrEngine(OcrEngine):
         self.recognize(
             input_file=input_file,
             output_file=output_hocr,
+            output_text=output_text,
             language=options.languages,
             image_dpi=options.image_dpi,
             options=options
         )
-        
-        # Extract plain text from hOCR for output_text
-        if output_text:
-            tree = etree.parse(str(output_hocr))
-            text_elements = tree.xpath('//span[@class="ocrx_word"]')
-            text = ' '.join(elem.text for elem in text_elements if elem.text)
-            output_text.write_text(text)
 
     def generate_pdf(self, input_file, output_pdf, output_text, options):
         """
