@@ -4,22 +4,22 @@ Surya OCR plugin for OCRmyPDF.
 
 from __future__ import annotations
 
-import contextlib
 import json
 import logging
 import os
-import subprocess
-import sys
 import tempfile
-import threading
 from pathlib import Path
 from typing import Dict, Any, List, Optional, Tuple, Sequence
+from pkg_resources import get_distribution
 
 import pluggy
 from ocrmypdf import Executor, OcrEngine, PdfContext, hookimpl
 from ocrmypdf._exec import tesseract
 from ocrmypdf.builtin_plugins.optimize import optimize_pdf as default_optimize_pdf
 from lxml import etree
+from PIL import Image
+from surya.recognition import RecognitionPredictor
+from surya.detection import DetectionPredictor
 
 log = logging.getLogger(__name__)
 
@@ -28,50 +28,7 @@ log = logging.getLogger(__name__)
 ISO_639_3_TO_SURYA: dict[str, str] = {
     "eng": "en",
     "fra": "fr",
-    "deu": "de",
-    "spa": "es",
-    "por": "pt",
-    "ita": "it",
-    "rus": "ru",
-    "jpn": "ja",
-    "chi_sim": "zh",
-    "chi_tra": "zh_traditional",
-    "kor": "ko",
-    "ara": "ar",
-    "hin": "hi",
-    "ben": "bn",
-    "tel": "te",
-    "tam": "ta",
-    "mar": "mr",
-    "guj": "gu",
-    "kan": "kn",
-    "mal": "ml",
-    "tha": "th",
-    "vie": "vi",
-    "tur": "tr",
-    "nld": "nl",
-    "swe": "sv",
-    "fin": "fi",
-    "pol": "pl",
-    "ukr": "uk",
-    "bul": "bg",
-    "ces": "cs",
-    "ron": "ro",
-    "hun": "hu",
-    "ell": "el",
-    "dan": "da",
-    "nor": "no",
-    "cat": "ca",
-    "hrv": "hr",
-    "heb": "he",
-    "ind": "id",
-    "lav": "lv",
-    "lit": "lt",
-    "slk": "sk",
-    "slv": "sl",
-    "est": "et",
-    "srp": "sr",
-    # Add more mappings as needed
+    "deu": "de"
 }
 
 
@@ -148,28 +105,28 @@ def add_options(parser):
 class SuryaOcrEngine(OcrEngine):
     """OCR engine that uses Surya OCR"""
 
+    def __init__(self):
+        """Initialize Surya predictors"""
+        super().__init__()
+        self.recognition_predictor = RecognitionPredictor()
+        self.detection_predictor = DetectionPredictor()
+
     @staticmethod
     def version():
         """Return Surya version information as a string"""
         try:
-            result = subprocess.run(
-                ["surya_ocr", "--version"],
-                capture_output=True,
-                text=True,
-                check=True,
-            )
-            return result.stdout.strip()
-        except (subprocess.SubprocessError, FileNotFoundError):
+            return get_distribution('surya-ocr').version
+        except Exception:
             return "unknown"
 
     @staticmethod
     def creator_tag(options):
         """Return the creator tag for the PDF metadata."""
         tag = "-PDF" if options.pdf_renderer == "sandwich" else ""
-        return f"Surya OCR{tag} {SuryaOcrEngine.version()}"
+        return f"Surya OCR{tag}"
 
     def __str__(self):
-        return f"Surya OCR {self.version()}"
+        return "Surya OCR"
 
     @staticmethod
     def languages(options):
@@ -200,68 +157,48 @@ class SuryaOcrEngine(OcrEngine):
         options: Dict[str, Any],
     ):
         """Run Surya OCR on an image and output hOCR"""
-        with tempfile.TemporaryDirectory() as temp_dir:
-            temp_dir_path = Path(temp_dir)
+        # Set up torch device if specified
+        if hasattr(options, 'surya_torch_device') and options.surya_torch_device:
+            os.environ['TORCH_DEVICE'] = options.surya_torch_device
             
-            # Set up torch device if specified
-            if hasattr(options, 'surya_torch_device') and options.surya_torch_device:
-                os.environ['TORCH_DEVICE'] = options.surya_torch_device
-                
-            # Set detection batch size if specified
-            if hasattr(options, 'surya_detection_batch_size') and options.surya_detection_batch_size:
-                os.environ['DETECTOR_BATCH_SIZE'] = str(options.surya_detection_batch_size)
+        # Set detection batch size if specified
+        if hasattr(options, 'surya_detection_batch_size') and options.surya_detection_batch_size:
+            os.environ['DETECTOR_BATCH_SIZE'] = str(options.surya_detection_batch_size)
+        
+        # Map ISO 639-3 language codes to Surya language codes
+        surya_langs = []
+        for lang in language:
+            if lang in ISO_639_3_TO_SURYA:
+                surya_langs.append(ISO_639_3_TO_SURYA[lang])
+            else:
+                log.warning(f"Unsupported language code: {lang}")
+        
+        try:
+            # Load image
+            image = Image.open(input_file)
             
-            # Map ISO 639-3 language codes to Surya language codes
-            surya_langs = []
-            for lang in language:
-                if lang in ISO_639_3_TO_SURYA:
-                    surya_langs.append(ISO_639_3_TO_SURYA[lang])
-                else:
-                    log.warning(f"Unsupported language code: {lang}")
+            # Run Surya OCR directly
+            predictions = self.recognition_predictor(
+                [image], 
+                [surya_langs if surya_langs else None], 
+                self.detection_predictor
+            )
             
-            # Run Surya OCR
-            cmd = ["surya_ocr", str(input_file), "--output_dir", str(temp_dir_path)]
-            if surya_langs:
-                cmd.extend(["--langs", ",".join(surya_langs)])
+            if not predictions or not predictions[0]:
+                raise RuntimeError("Surya OCR failed to produce results")
             
-            try:
-                # Redirect stdout to stderr during OCR to avoid interfering with pipe operations
-                with contextlib.redirect_stdout(sys.stderr):
-                    result = subprocess.run(cmd, capture_output=True, text=True, check=True)
-                
-                # Parse the output to find the results file path
-                doc_name = None
-                for line in result.stdout.split('\n'):
-                    if line.startswith("Wrote results to"):
-                        doc_path = line.split("Wrote results to")[-1].strip()
-                        doc_name = os.path.basename(doc_path)
-                        break
-                
-                if not doc_name:
-                    raise RuntimeError("Could not find results in Surya output")
-                
-                # Get results JSON
-                results_file = temp_dir_path / doc_name / "results.json"
-                if not results_file.exists():
-                    raise RuntimeError("Surya OCR failed to produce results.json")
-                
-                # Convert Surya JSON to hOCR
-                with open(results_file) as f:
-                    results = json.load(f)
-                
-                # Get the first (and only) page from results
-                page_data = results[doc_name][0]
-                
-                # Generate hOCR from Surya results
-                self._surya_to_hocr(page_data, input_file, output_file, image_dpi)
-                
-            except subprocess.CalledProcessError as e:
-                error_msg = e.stderr if e.stderr else str(e)
-                raise RuntimeError(f"Surya OCR failed: {error_msg}")
+            # Get the first (and only) page from results
+            page_data = predictions[0]
+            
+            # Generate hOCR from Surya results
+            self._surya_to_hocr(page_data, input_file, output_file, image_dpi)
+            
+        except Exception as e:
+            raise RuntimeError(f"Surya OCR failed: {str(e)}")
     
     def _surya_to_hocr(self, page_data, input_file, output_file, image_dpi):
         """Convert Surya OCR results to hOCR format"""
-        source_bbox = page_data["image_bbox"]
+        source_bbox = page_data.image_bbox
         target_bbox = source_bbox  # Use same dimensions
         
         # Create hOCR document
@@ -290,7 +227,7 @@ class SuryaOcrEngine(OcrEngine):
         etree.SubElement(
             head, 
             "meta", 
-            attrib={"name": "ocr-system", "content": f"Surya OCR {self.version()}"}
+            attrib={"name": "ocr-system", "content": f"Surya OCR {SuryaOcrEngine.version()}"}
         )
         etree.SubElement(
             head,
@@ -337,8 +274,8 @@ class SuryaOcrEngine(OcrEngine):
         )
         
         # Process text lines
-        for text_line in page_data["text_lines"]:
-            bbox = text_line["bbox"]
+        for text_line in page_data.text_lines:
+            bbox = text_line.bbox
             bbox_str = f"{int(bbox[0])} {int(bbox[1])} {int(bbox[2])} {int(bbox[3])}"
             
             # Create the ocr_carea
@@ -371,18 +308,19 @@ class SuryaOcrEngine(OcrEngine):
                 },
             )
             
-            # Create word with text
+            # Create word with text and confidence
+            confidence = int((text_line.confidence or 0.0) * 100)
             word = etree.SubElement(
                 line,
                 "span",
                 attrib={
                     "class": "ocrx_word",
-                    "title": f"bbox {bbox_str}; x_wconf {int(text_line['confidence']*100)}",
+                    "title": f"bbox {bbox_str}; x_wconf {confidence}",
                 },
             )
             
             # Set text content
-            word.text = text_line["text"]
+            word.text = text_line.text
         
         # Write the hOCR file
         doctype = '<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">'
