@@ -4,6 +4,7 @@ Surya OCR plugin for OCRmyPDF.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import logging
 import math
@@ -24,6 +25,10 @@ from surya.detection import DetectionPredictor
 
 log = logging.getLogger(__name__)
 
+# Global predictors
+_recognition_predictor = None
+_detection_predictor = None
+
 # ISO_639_3 to Surya language code mapping
 # Surya generally uses ISO 639-1 codes and some custom codes
 ISO_639_3_TO_SURYA: dict[str, str] = {
@@ -36,8 +41,13 @@ ISO_639_3_TO_SURYA: dict[str, str] = {
 @hookimpl
 def initialize(plugin_manager: pluggy.PluginManager):
     """Initialize plugin and handle conflicts."""
-    # Suppress other OCR engines or plugins if needed
-    pass
+    global _recognition_predictor, _detection_predictor
+    
+    # Initialize predictors with suppressed output
+    with open(os.devnull, 'w') as devnull:
+        with contextlib.redirect_stdout(devnull), contextlib.redirect_stderr(devnull):
+            _recognition_predictor = RecognitionPredictor()
+            _detection_predictor = DetectionPredictor()
 
 
 @hookimpl
@@ -110,9 +120,10 @@ class SuryaOcrEngine(OcrEngine):
     def __init__(self):
         """Initialize Surya predictors"""
         super().__init__()
-        self.recognition_predictor = RecognitionPredictor()
-        self.detection_predictor = DetectionPredictor()
-
+        # Use global predictors
+        self.recognition_predictor = _recognition_predictor
+        self.detection_predictor = _detection_predictor
+        
     @staticmethod
     def version():
         """Return Surya version information as a string"""
@@ -180,12 +191,14 @@ class SuryaOcrEngine(OcrEngine):
             # Load image
             image = Image.open(input_file)
             
-            # Run Surya OCR directly
-            predictions = self.recognition_predictor(
-                [image], 
-                [surya_langs if surya_langs else None], 
-                self.detection_predictor
-            )
+            # Suppress ALL output from surya
+            with open(os.devnull, 'w') as devnull:
+                with contextlib.redirect_stdout(devnull), contextlib.redirect_stderr(devnull):
+                    predictions = self.recognition_predictor(
+                        [image], 
+                        [surya_langs if surya_langs else None], 
+                        self.detection_predictor
+                    )
             
             if not predictions or not predictions[0]:
                 raise RuntimeError("Surya OCR failed to produce results")
