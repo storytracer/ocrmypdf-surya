@@ -13,6 +13,7 @@ import tempfile
 from pathlib import Path
 from typing import Dict, Any, List, Optional, Tuple, Sequence
 from pkg_resources import get_distribution
+import torch
 
 import pluggy
 from ocrmypdf import Executor, OcrEngine, PdfContext, hookimpl
@@ -53,7 +54,8 @@ def initialize(plugin_manager: pluggy.PluginManager):
 @hookimpl
 def check_options(options):
     """Validate options and set up Surya environment variables."""
-    options.jobs = 1
+    if hasattr(options, 'surya_torch_device') and options.surya_torch_device == 'cuda':
+        options.jobs = 1  # Disable multiprocessing if using GPU
     # Handle Surya environment variables
     if hasattr(options, 'surya_env') and options.surya_env:
         for env_var in options.surya_env.split(','):
@@ -110,7 +112,7 @@ def add_options(parser):
         '--surya-torch-device',
         help="Torch device to use (cpu, cuda)",
         choices=['cpu', 'cuda'],
-        default=None
+        default='cpu'
     )
 
 
